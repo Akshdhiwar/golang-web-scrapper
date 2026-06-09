@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jobscraper_app
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    volumes:
+      - scraper_logs:/app/logs
+
+volumes:
+  scraper_logs:
