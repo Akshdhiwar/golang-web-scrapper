@@ -174,8 +174,10 @@ func (p *Pipeline) Run() {
 				zap.String("source", result.Source),
 				zap.Error(result.Err),
 			)
-			// Alert via Telegram but don't abort the whole pipeline
-			_ = p.notifier.SendAlert(fmt.Sprintf("Scraper `%s` failed: %v", result.Source, result.Err))
+			// Alert via Telegram but don't abort the whole pipeline (skip indeed to avoid spam)
+			if result.Source != models.SourceIndeed {
+				_ = p.notifier.SendAlert(fmt.Sprintf("Scraper `%s` failed: %v", result.Source, result.Err))
+			}
 			continue
 		}
 
