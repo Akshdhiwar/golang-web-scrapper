@@ -2,83 +2,62 @@ name: Job Scraper
 
 on:
   schedule:
-    # Runs every hour at :00 UTC
-    - cron: "0 * * * *"
-  workflow_dispatch:       # Allow manual trigger from GitHub UI
+    - cron: "0 * * * *"   # every hour
+  workflow_dispatch:        # manual trigger from GitHub UI
 
 jobs:
   scrape:
-    name: Run Job Scraper
-    runs-on: ubuntu-latest
-    timeout-minutes: 30     # Kill the job if it hangs beyond 30 min
-    # No service container needed — using Supabase (external managed DB)
+    runs-on: ubuntu-22.04  # pinned: ubuntu-latest (24.04) breaks libasound2
+    timeout-minutes: 30
 
     steps:
-      # ── 1. Checkout ──────────────────────────────────────────
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # ── 2. Go setup ──────────────────────────────────────────
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      # ── 3. Go module cache ───────────────────────────────────
-      - name: Download Go modules
-        run: go mod download
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-chromium-${{ hashFiles('go.sum') }}
 
-      # ── 5. Build binary ──────────────────────────────────────
-      - name: Build scraper binary
-        run: |
-          CGO_ENABLED=0 GOOS=linux go build \
-            -ldflags="-w -s" \
-            -o ./bin/scraper \
-            ./cmd/main.go
-
-      # ── 4. Install Playwright browsers + ALL system deps ───────
-      # --with-deps installs Chromium + all OS-level dependencies
-      # automatically — works on Ubuntu 22.04 and 24.04 alike
-      - name: Install Playwright Chromium
+      - name: Install Playwright + Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
         run: go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
 
-      # ── 7. Run scraper (one-shot, exits after first run) ─────
-      - name: Run scraper
+      - name: Install Playwright system deps only
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: go run github.com/playwright-community/playwright-go/cmd/playwright install-deps chromium
+
+      - name: Build
+        run: go build -ldflags="-w -s" -o ./scraper ./cmd/main.go
+
+      - name: Run
         env:
-          # Supabase connection string — set this secret in:
-          # GitHub → Settings → Secrets → Actions → DATABASE_URL
-          # Format: postgres://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
-          DATABASE_URL:             ${{ secrets.DATABASE_URL }}
-          TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:         ${{ secrets.TELEGRAM_CHAT_ID }}
-          KEYWORDS:                 ${{ vars.SCRAPER_KEYWORDS }}
-          LOCATIONS:                ${{ vars.SCRAPER_LOCATIONS }}
-          MAX_PAGES:                ${{ vars.MAX_PAGES }}
-          MIN_DELAY_SECONDS:        ${{ vars.MIN_DELAY_SECONDS }}
-          MAX_DELAY_SECONDS:        ${{ vars.MAX_DELAY_SECONDS }}
-          MAX_RETRIES:              ${{ vars.MAX_RETRIES }}
-          NOTIFICATION_BATCH_SIZE:  ${{ vars.NOTIFICATION_BATCH_SIZE }}
-          # One-shot mode: run once then exit (GitHub Actions handles recurrence)
-          RUN_ONCE:                 "true"
+          DATABASE_URL:            ${{ secrets.DATABASE_URL }}
+          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:        ${{ secrets.TELEGRAM_CHAT_ID }}
+          KEYWORDS:                ${{ vars.SCRAPER_KEYWORDS }}
+          LOCATIONS:               ${{ vars.SCRAPER_LOCATIONS }}
+          MAX_PAGES:               ${{ vars.MAX_PAGES }}
+          MIN_DELAY_SECONDS:       ${{ vars.MIN_DELAY_SECONDS }}
+          MAX_DELAY_SECONDS:       ${{ vars.MAX_DELAY_SECONDS }}
+          MAX_RETRIES:             ${{ vars.MAX_RETRIES }}
+          NOTIFICATION_BATCH_SIZE: ${{ vars.NOTIFICATION_BATCH_SIZE }}
+          RUN_ONCE:                "true"
         run: |
-          echo "⏱  Scraper started at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           START=$(date +%s)
+          ./scraper
+          echo "Done in $(( $(date +%s) - START ))s"
 
-          ./bin/scraper
-
-          END=$(date +%s)
-          ELAPSED=$((END - START))
-          echo ""
-          echo "✅ Scraper finished at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-          echo "⏱  Total elapsed time: ${ELAPSED} seconds ($(( ELAPSED / 60 ))m $(( ELAPSED % 60 ))s)"
-          echo "scraper_elapsed_seconds=${ELAPSED}" >> "$GITHUB_OUTPUT"
-
-      # ── 8. Upload logs on failure ─────────────────────────────
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: scraper-failure-logs-${{ github.run_number }}
+          name: logs-${{ github.run_number }}
           path: "*.log"
           retention-days: 7
