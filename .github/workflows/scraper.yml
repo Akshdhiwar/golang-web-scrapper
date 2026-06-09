@@ -3,21 +3,26 @@ name: Job Scraper
 on:
   schedule:
     - cron: "0 * * * *"   # every hour
-  workflow_dispatch:        # manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   scrape:
-    runs-on: ubuntu-22.04  # pinned: ubuntu-latest (24.04) breaks libasound2
-    timeout-minutes: 30
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      # ── Cache 1: compiled binary (keyed on all Go source + deps) ──
+      # On cache hit the entire Go setup + build step is skipped
+      - name: Cache binary
+        id: bin-cache
+        uses: actions/cache@v4
         with:
-          go-version-file: go.mod
-          cache: true
+          path: ./scraper
+          key: scraper-bin-${{ hashFiles('**/*.go', 'go.sum') }}
 
+      # ── Cache 2: Playwright Chromium browser ───────────────────────
       - name: Cache Playwright browsers
         id: pw-cache
         uses: actions/cache@v4
@@ -25,18 +30,23 @@ jobs:
           path: ~/.cache/ms-playwright
           key: pw-chromium-${{ hashFiles('go.sum') }}
 
+      # ── Only needed when either cache misses ───────────────────────
+      - uses: actions/setup-go@v5
+        if: steps.bin-cache.outputs.cache-hit != 'true' || steps.pw-cache.outputs.cache-hit != 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        if: steps.bin-cache.outputs.cache-hit != 'true'
+        run: go build -ldflags="-w -s" -o ./scraper ./cmd/main.go
+
       - name: Install Playwright + Chromium
         if: steps.pw-cache.outputs.cache-hit != 'true'
         run: go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
 
-      - name: Install Playwright system deps only
-        if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: go run github.com/playwright-community/playwright-go/cmd/playwright install-deps chromium
-
-      - name: Build
-        run: go build -ldflags="-w -s" -o ./scraper ./cmd/main.go
-
-      - name: Run
+      # ── Run ────────────────────────────────────────────────────────
+      - name: Run scraper
         env:
           DATABASE_URL:            ${{ secrets.DATABASE_URL }}
           TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
