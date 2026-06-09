@@ -3,6 +3,7 @@ package scheduler
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -15,6 +16,15 @@ import (
 	"github.com/yourname/job-scraper/notifier"
 	"github.com/yourname/job-scraper/scrapers"
 )
+
+// taskTiming records elapsed time for one scraper+keyword+location task
+type taskTiming struct {
+	Source   string
+	Keyword  string
+	Location string
+	Elapsed  time.Duration
+	Err      bool
+}
 
 // Pipeline orchestrates scraping, deduplication, storage, and notifications
 type Pipeline struct {
@@ -110,18 +120,36 @@ func (p *Pipeline) Run() {
 	totalCombinations := len(p.scrapers) * len(p.cfg.Keywords) * len(p.cfg.Locations)
 	resultCh := make(chan scrapers.ScrapeResult, totalCombinations)
 
+	// timingCh collects per-task timings for the summary
+	timingCh := make(chan taskTiming, totalCombinations)
+
 	for _, scraper := range p.scrapers {
 		for _, keyword := range p.cfg.Keywords {
 			for _, location := range p.cfg.Locations {
 				wg.Add(1)
 				go func(sc scrapers.Scraper, kw, loc string) {
 					defer wg.Done()
+					t0 := time.Now()
 					p.logger.Info("Starting scraper",
 						zap.String("source", sc.Name()),
 						zap.String("keyword", kw),
 						zap.String("location", loc),
 					)
 					jobs, err := sc.Scrape(kw, loc, p.cfg.MaxPages)
+					elapsed := time.Since(t0)
+					p.logger.Info("Scraper task done",
+						zap.String("source", sc.Name()),
+						zap.String("keyword", kw),
+						zap.String("location", loc),
+						zap.Duration("elapsed", elapsed),
+					)
+					timingCh <- taskTiming{
+						Source:   sc.Name(),
+						Keyword:  kw,
+						Location: loc,
+						Elapsed:  elapsed,
+						Err:      err != nil,
+					}
 					resultCh <- scrapers.ScrapeResult{
 						Source: sc.Name(),
 						Jobs:   jobs,
@@ -171,6 +199,59 @@ func (p *Pipeline) Run() {
 	}
 
 	duration := time.Since(startTime)
+
+	// ── Timing summary ─────────────────────────────────────────
+	close(timingCh)
+	var timings []taskTiming
+	for t := range timingCh {
+		timings = append(timings, t)
+	}
+	if len(timings) > 0 {
+		var total time.Duration
+		var fastest, slowest taskTiming
+		fastest = timings[0]
+		slowest = timings[0]
+		for _, t := range timings {
+			total += t.Elapsed
+			if t.Elapsed < fastest.Elapsed {
+				fastest = t
+			}
+			if t.Elapsed > slowest.Elapsed {
+				slowest = t
+			}
+		}
+		avg := total / time.Duration(len(timings))
+
+		// Per-source averages
+		sourceElapsed := make(map[string]time.Duration)
+		sourceCount := make(map[string]int)
+		for _, t := range timings {
+			sourceElapsed[t.Source] += t.Elapsed
+			sourceCount[t.Source]++
+		}
+		sources := make([]string, 0, len(sourceElapsed))
+		for s := range sourceElapsed {
+			sources = append(sources, s)
+		}
+		sort.Strings(sources)
+
+		p.logger.Info("=== Timing Summary ===",
+			zap.Duration("wall_clock_total", duration),
+			zap.Duration("avg_per_task", avg),
+			zap.String("fastest_task", fmt.Sprintf("%s/%s/%s (%s)", fastest.Source, fastest.Keyword, fastest.Location, fastest.Elapsed.Round(time.Millisecond))),
+			zap.String("slowest_task", fmt.Sprintf("%s/%s/%s (%s)", slowest.Source, slowest.Keyword, slowest.Location, slowest.Elapsed.Round(time.Millisecond))),
+		)
+		for _, src := range sources {
+			count := sourceCount[src]
+			srcAvg := sourceElapsed[src] / time.Duration(count)
+			p.logger.Info("Source avg",
+				zap.String("source", src),
+				zap.Duration("avg_per_task", srcAvg),
+				zap.Int("tasks", count),
+			)
+		}
+	}
+
 	p.logger.Info("=== Pipeline run complete ===",
 		zap.Duration("duration", duration),
 		zap.Int("total_scraped", totalJobs),

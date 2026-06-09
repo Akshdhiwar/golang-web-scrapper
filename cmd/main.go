@@ -4,7 +4,9 @@ package main
 import (
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -74,6 +76,21 @@ func main() {
 
 	// ── 6. Pipeline / Scheduler ────────────────────────────────
 	pipeline := scheduler.New(cfg, database, scraperList, tgNotifier, logger)
+
+	// ── RUN_ONCE mode (used by GitHub Actions) ─────────────────
+	// When RUN_ONCE=true the scraper executes one full run then exits.
+	// The external cron (GitHub Actions schedule) handles recurrence.
+	if strings.EqualFold(os.Getenv("RUN_ONCE"), "true") {
+		start := time.Now()
+		logger.Info("RUN_ONCE mode — executing single pipeline run")
+		pipeline.Run()
+		elapsed := time.Since(start)
+		logger.Info("RUN_ONCE complete",
+			zap.Duration("elapsed", elapsed),
+			zap.String("elapsed_human", elapsed.Round(time.Second).String()),
+		)
+		return
+	}
 
 	if err := pipeline.Start(); err != nil {
 		logger.Fatal("Failed to start pipeline", zap.Error(err))
