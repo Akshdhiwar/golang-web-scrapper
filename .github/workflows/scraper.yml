@@ -22,12 +22,14 @@ jobs:
           path: ./scraper
           key: scraper-bin-${{ hashFiles('**/*.go', 'go.sum') }}
 
-      # ── Cache 2: Playwright Chromium browser ───────────────────────
+      # ── Cache 2: Playwright Chromium browser & Driver ──────────────
       - name: Cache Playwright browsers
         id: pw-cache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ms-playwright
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/ms-playwright-go
           key: pw-chromium-${{ hashFiles('go.sum') }}
 
       # ── Only needed when either cache misses ───────────────────────

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/playwright-community/playwright-go"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 
@@ -100,6 +101,11 @@ func (p *Pipeline) Run() {
 		p.running = false
 		p.mu.Unlock()
 	}()
+
+	// One-time Playwright installation to avoid race conditions when scrapers run concurrently
+	if err := playwright.Install(&playwright.RunOptions{Browsers: []string{"chromium"}}); err != nil {
+		p.logger.Error("Failed to perform thread-safe Playwright installation", zap.Error(err))
+	}
 
 	startTime := time.Now()
 	p.logger.Info("=== Pipeline run started ===",

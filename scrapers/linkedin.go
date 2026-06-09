@@ -41,11 +41,6 @@ func (s *LinkedInScraper) Name() string {
 
 // Scrape uses a headless browser to scrape LinkedIn job listings
 func (s *LinkedInScraper) Scrape(keyword, location string, maxPages int) ([]*models.Job, error) {
-	// Install Playwright browsers if needed
-	if err := playwright.Install(&playwright.RunOptions{Browsers: []string{"chromium"}}); err != nil {
-		return nil, fmt.Errorf("could not install playwright: %w", err)
-	}
-
 	pw, err := playwright.Run()
 	if err != nil {
 		return nil, fmt.Errorf("could not start playwright: %w", err)

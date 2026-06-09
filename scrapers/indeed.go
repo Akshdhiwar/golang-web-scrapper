@@ -39,11 +39,6 @@ func (s *IndeedScraper) Name() string {
 
 // Scrape fetches Indeed jobs for a keyword and location
 func (s *IndeedScraper) Scrape(keyword, location string, maxPages int) ([]*models.Job, error) {
-	// Install Playwright browsers if needed
-	if err := playwright.Install(&playwright.RunOptions{Browsers: []string{"chromium"}}); err != nil {
-		return nil, fmt.Errorf("could not install playwright: %w", err)
-	}
-
 	pw, err := playwright.Run()
 	if err != nil {
 		return nil, fmt.Errorf("could not start playwright: %w", err)
