@@ -1,12 +1,7 @@
 # ── Build Stage ─────────────────────────────────────────────
-FROM golang:1.21-bookworm AS builder
+FROM golang:1.22-bookworm AS builder
 
 WORKDIR /app
-
-# Install system dependencies for Playwright
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
 
 # Download Go dependencies first (layer caching)
 COPY go.mod go.sum ./
@@ -15,25 +10,29 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/bin/scraper ./cmd/main.go
+# Build the scraper and the playwright-go CLI (used to install its driver)
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/bin/scraper ./cmd/main.go \
+ && CGO_ENABLED=0 GOOS=linux go build -o /app/bin/playwright github.com/mxschmitt/playwright-go/cmd/playwright
 
 
 # ── Runtime Stage ────────────────────────────────────────────
-FROM mcr.microsoft.com/playwright:v1.42.0-jammy
+# Must match the Playwright version bundled with playwright-go in go.mod
+# (v0.6401.0 → Playwright 1.64.1). The image ships Chromium + system deps.
+FROM mcr.microsoft.com/playwright:v1.64.1-noble
 
 WORKDIR /app
 
-# Copy the compiled binary
-COPY --from=builder /app/bin/scraper .
+COPY --from=builder /app/bin/scraper /app/bin/playwright ./
 
-# Install Playwright browsers (Chromium only)
-RUN npx playwright install chromium
+# Feed definitions (read at runtime; edit and rebuild to change feeds)
+COPY profiles.yaml companies.yaml ./
 
-# Run as non-root
-RUN adduser --disabled-password --gecos '' scraper && chown -R scraper:scraper /app
+# Run as non-root, and install the playwright-go driver into that user's
+# cache so startup doesn't download it (browsers come from the base image).
+RUN adduser --disabled-password --gecos '' scraper \
+ && mkdir -p /app/.data /app/logs \
+ && chown -R scraper:scraper /app
 USER scraper
-
-EXPOSE 8080
+RUN ./playwright install chromium
 
 CMD ["./scraper"]

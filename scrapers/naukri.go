@@ -21,7 +21,6 @@ type NaukriScraper struct {
 	minDelay   int
 	maxDelay   int
 	maxRetries int
-	knownLinks map[string]bool
 }
 
 // NewNaukriScraper creates a new Naukri scraper
@@ -31,7 +30,6 @@ func NewNaukriScraper(logger *zap.Logger, minDelay, maxDelay, maxRetries int) *N
 		minDelay:   minDelay,
 		maxDelay:   maxDelay,
 		maxRetries: maxRetries,
-		knownLinks: make(map[string]bool),
 	}
 }
 
@@ -39,23 +37,12 @@ func (s *NaukriScraper) Name() string {
 	return models.SourceNaukri
 }
 
-// naukriAPIResponse represents the JSON response from Naukri's internal API
-type naukriAPIResponse struct {
-	JobDetails []struct {
-		Title       string `json:"title"`
-		CompanyName string `json:"companyName"`
-		Location    []struct {
-			Label string `json:"label"`
-		} `json:"location"`
-		PostedDate string `json:"footerPlaceholderLabel"`
-		JdURL      string `json:"jdURL"`
-	} `json:"jobDetails"`
-}
-
 // Scrape fetches Naukri jobs using their public-facing job listing pages
-func (s *NaukriScraper) Scrape(keyword, location string, maxPages int) ([]*models.Job, error) {
+func (s *NaukriScraper) Scrape(q Query) ([]*models.Job, error) {
+	keyword, location, maxPages := q.Keyword, q.Location, q.MaxPages
 	var jobs []*models.Job
 	stopPaging := false
+	knownLinks := make(map[string]bool) // per call: safe under concurrency
 
 	c := colly.NewCollector(
 		colly.AllowedDomains("www.naukri.com"),
@@ -118,11 +105,11 @@ func (s *NaukriScraper) Scrape(keyword, location string, maxPages int) ([]*model
 			// Clean the link for deduplication
 			link = cleanNaukriLink(link)
 
-			if s.knownLinks[link] {
+			if knownLinks[link] {
 				stopPaging = true
 				break
 			}
-			s.knownLinks[link] = true
+			knownLinks[link] = true
 
 			loc := ""
 			if len(jd.Locations) > 0 {
@@ -178,11 +165,11 @@ func (s *NaukriScraper) Scrape(keyword, location string, maxPages int) ([]*model
 			return
 		}
 
-		if s.knownLinks[job.Link] {
+		if knownLinks[job.Link] {
 			stopPaging = true
 			return
 		}
-		s.knownLinks[job.Link] = true
+		knownLinks[job.Link] = true
 
 		jobs = append(jobs, job)
 		s.logger.Debug("Found job (HTML)",
@@ -205,7 +192,8 @@ func (s *NaukriScraper) Scrape(keyword, location string, maxPages int) ([]*model
 			break
 		}
 
-		searchURL := buildNaukriURL(keyword, location, page)
+		searchURL := buildNaukriURL(keyword, location, page, q.PostedWithinHours)
+		before := len(jobs)
 
 		retryErr := utils.Retry(s.maxRetries, func() error {
 			return c.Visit(searchURL)
@@ -225,6 +213,16 @@ func (s *NaukriScraper) Scrape(keyword, location string, maxPages int) ([]*model
 			zap.Int("page", page),
 			zap.Int("jobs_so_far", len(jobs)),
 		)
+
+		pageLinks := make([]string, 0, len(jobs)-before)
+		for _, j := range jobs[before:] {
+			pageLinks = append(pageLinks, j.Link)
+		}
+		if q.mostlySeen(pageLinks) {
+			s.logger.Debug("Naukri page already seen in an earlier run, stopping pagination",
+				zap.String("keyword", keyword), zap.Int("page", page))
+			break
+		}
 	}
 
 	return jobs, nil
@@ -232,7 +230,7 @@ func (s *NaukriScraper) Scrape(keyword, location string, maxPages int) ([]*model
 
 // buildNaukriURL constructs a Naukri search URL
 // Naukri uses path segments: /keyword-jobs-in-location-pageN
-func buildNaukriURL(keyword, location string, page int) string {
+func buildNaukriURL(keyword, location string, page, postedWithinHours int) string {
 	kwSlug := strings.ReplaceAll(strings.ToLower(keyword), " ", "-")
 	locSlug := strings.ReplaceAll(strings.ToLower(location), " ", "-")
 
@@ -243,6 +241,7 @@ func buildNaukriURL(keyword, location string, page int) string {
 
 	params := url.Values{}
 	params.Set("experience", "0")
+	params.Set("jobAge", fmt.Sprintf("%d", ceilDays(postedWithinHours))) // posted within N days
 	return base + "?" + params.Encode()
 }
 

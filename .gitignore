@@ -3,3 +3,10 @@ bin/
 *.exe
 *.test
 *.out
+
+# Build outputs
+/scraper
+cmd/job
+
+# Local file store (used when DATABASE_URL is empty)
+.data/

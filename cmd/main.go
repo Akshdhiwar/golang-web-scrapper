@@ -15,6 +15,7 @@ import (
 	"github.com/yourname/job-scraper/notifier"
 	"github.com/yourname/job-scraper/scheduler"
 	"github.com/yourname/job-scraper/scrapers"
+	"github.com/yourname/job-scraper/scrapers/feeds"
 	"github.com/yourname/job-scraper/utils"
 )
 
@@ -26,56 +27,82 @@ func main() {
 	}
 	defer logger.Sync()
 
-	logger.Info("Starting Job Scraper",
-		zap.String("version", "1.0.0"),
-	)
+	logger.Info("Starting Job Scraper", zap.String("version", "2.0.0"))
 
-	// ── 2. Config ──────────────────────────────────────────────
+	// ── 2. Config & feeds ──────────────────────────────────────
 	cfg := config.Load()
+	profiles, err := config.LoadProfiles(cfg.ProfilesFile, cfg)
+	if err != nil {
+		logger.Fatal("Invalid profiles", zap.Error(err))
+	}
+	companies, err := config.LoadCompanies(cfg.CompaniesFile)
+	if err != nil {
+		logger.Fatal("Invalid companies", zap.Error(err))
+	}
+
+	profileIDs := make([]string, len(profiles))
+	for i, p := range profiles {
+		profileIDs[i] = p.ID
+		logger.Info("Feed loaded",
+			zap.String("id", p.ID),
+			zap.String("label", p.Label),
+			zap.Strings("sources", p.Sources),
+		)
+	}
 	logger.Info("Configuration loaded",
-		zap.Strings("keywords", cfg.Keywords),
-		zap.Strings("locations", cfg.Locations),
+		zap.Int("feeds", len(profiles)),
+		zap.Int("career_pages", len(companies)),
 		zap.String("schedule", cfg.CronSchedule),
+		zap.Bool("dry_run", cfg.DryRun),
 	)
 
-	// ── 3. Database ────────────────────────────────────────────
-	database, err := db.New(cfg.DatabaseURL, logger)
+	// ── 3. Store (Postgres if DATABASE_URL is set, else a local file) ──
+	store, err := db.Open(cfg.DatabaseURL, cfg.StoreFile, profileIDs, cfg.DryRun, logger)
 	if err != nil {
-		logger.Fatal("Failed to connect to database", zap.Error(err))
+		logger.Fatal("Failed to open store", zap.Error(err))
 	}
-	defer database.Close()
-
-	if err := database.Migrate(); err != nil {
-		logger.Fatal("Database migration failed", zap.Error(err))
-	}
+	defer store.Close()
 
 	// ── 4. Notifier ────────────────────────────────────────────
 	tgNotifier := notifier.NewTelegramNotifier(
 		cfg.TelegramBotToken,
 		cfg.TelegramChatID,
-		cfg.NotificationBatchSize,
+		cfg.DryRun,
 		logger,
 	)
-
-	if tgNotifier.IsConfigured() {
+	switch {
+	case cfg.DryRun:
+		logger.Info("DRY_RUN — Telegram messages will be printed, not sent")
+	case tgNotifier.IsConfigured():
 		logger.Info("Telegram notifications enabled")
-	} else {
+	default:
 		logger.Warn("Telegram not configured — notifications disabled. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
 	}
 
-	// ── 5. Scrapers ────────────────────────────────────────────
-	scraperList := []scrapers.Scraper{
-		scrapers.NewIndeedScraper(logger, cfg.MinDelaySeconds, cfg.MaxDelaySeconds, cfg.MaxRetries),
-		scrapers.NewNaukriScraper(logger, cfg.MinDelaySeconds, cfg.MaxDelaySeconds, cfg.MaxRetries),
-		scrapers.NewLinkedInScraper(logger, cfg.MinDelaySeconds, cfg.MaxDelaySeconds, cfg.MaxRetries),
+	// ── 5. Sources ─────────────────────────────────────────────
+	// Chromium is installed and launched lazily, the first time a browser
+	// source actually needs it.
+	browser := &scrapers.Browser{}
+	defer browser.Close()
+
+	scraperMap := map[string]scrapers.Scraper{
+		config.SourceLinkedIn: scrapers.NewLinkedInScraper(logger, browser, cfg.MinDelaySeconds, cfg.MaxDelaySeconds, cfg.MaxRetries),
+		config.SourceIndeed:   scrapers.NewIndeedScraper(logger, browser, cfg.MinDelaySeconds, cfg.MaxDelaySeconds, cfg.MaxRetries),
+		config.SourceNaukri:   scrapers.NewNaukriScraper(logger, cfg.MinDelaySeconds, cfg.MaxDelaySeconds, cfg.MaxRetries),
+	}
+	feedMap := map[string]scrapers.Feed{
+		config.SourceRemoteOK:  feeds.RemoteOK{},
+		config.SourceRemotive:  feeds.Remotive{},
+		config.SourceArbeitnow: feeds.Arbeitnow{},
+		config.SourceHN:        feeds.HN{},
+		config.SourceCareers:   feeds.Careers{Companies: companies, Logger: logger},
 	}
 
-	logger.Info("Scrapers registered",
-		zap.Int("count", len(scraperList)),
-	)
-
 	// ── 6. Pipeline / Scheduler ────────────────────────────────
-	pipeline := scheduler.New(cfg, database, scraperList, tgNotifier, logger)
+	pipeline, err := scheduler.New(cfg, store, profiles, scraperMap, feedMap, tgNotifier, logger)
+	if err != nil {
+		logger.Fatal("Failed to build pipeline", zap.Error(err))
+	}
 
 	// ── RUN_ONCE mode (used by GitHub Actions) ─────────────────
 	// When RUN_ONCE=true the scraper executes one full run then exits.

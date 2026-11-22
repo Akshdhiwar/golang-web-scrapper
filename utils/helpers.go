@@ -31,7 +31,7 @@ func RandomDelay(minSec, maxSec int) {
 		time.Sleep(time.Duration(minSec) * time.Second)
 		return
 	}
-	delay := minSec + rand.Intn(maxSec-minSec)
+	delay := minSec + rand.Intn(maxSec-minSec+1) // inclusive of maxSec
 	time.Sleep(time.Duration(delay) * time.Second)
 }
 
@@ -49,14 +49,13 @@ func NewLogger() (*zap.Logger, error) {
 // Retry retries a function up to maxAttempts times with exponential backoff
 func Retry(maxAttempts int, fn func() error) error {
 	var lastErr error
-	for i := 0; i < maxAttempts; i++ {
-		if err := fn(); err != nil {
-			lastErr = err
-			backoff := time.Duration(1<<uint(i)) * time.Second // 1s, 2s, 4s
-			time.Sleep(backoff)
-			continue
+	for i := range max(maxAttempts, 1) {
+		if lastErr = fn(); lastErr == nil {
+			return nil
 		}
-		return nil
+		if i < maxAttempts-1 {
+			time.Sleep(time.Duration(1<<uint(i)) * time.Second) // 1s, 2s, 4s
+		}
 	}
 	return lastErr
 }

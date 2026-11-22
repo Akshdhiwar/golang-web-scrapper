@@ -1,0 +1,60 @@
+# companies.yaml — company career pages scanned by the "careers" source.
+#
+# Each company must host its jobs on a public ATS board:
+#   greenhouse → https://boards-api.greenhouse.io/v1/boards/<slug>/jobs
+#   lever      → https://api.lever.co/v0/postings/<slug>?mode=json
+#   ashby      → https://api.ashbyhq.com/posting-api/job-board/<slug>
+# Find the slug in the company's careers URL (e.g. boards.greenhouse.io/stripe,
+# jobs.lever.co/zeta, jobs.ashbyhq.com/openai). All slugs below were checked
+# on 2026-11-22; each profile's filters decide which of their jobs you get.
+
+companies:
+  # ── Greenhouse ───────────────────────────────────────────────
+  - { name: Cloudflare,      ats: greenhouse, slug: cloudflare }
+  - { name: Stripe,          ats: greenhouse, slug: stripe }
+  - { name: GitLab,          ats: greenhouse, slug: gitlab }
+  - { name: Datadog,         ats: greenhouse, slug: datadog }
+  - { name: Twilio,          ats: greenhouse, slug: twilio }
+  - { name: MongoDB,         ats: greenhouse, slug: mongodb }
+  - { name: Elastic,         ats: greenhouse, slug: elastic }
+  - { name: Grafana Labs,    ats: greenhouse, slug: grafanalabs }
+  - { name: Cockroach Labs,  ats: greenhouse, slug: cockroachlabs }
+  - { name: Figma,           ats: greenhouse, slug: figma }
+  - { name: Airbnb,          ats: greenhouse, slug: airbnb }
+  - { name: Coinbase,        ats: greenhouse, slug: coinbase }
+  - { name: Reddit,          ats: greenhouse, slug: reddit }
+  - { name: Databricks,      ats: greenhouse, slug: databricks }
+  - { name: Samsara,         ats: greenhouse, slug: samsara }
+  - { name: Druva,           ats: greenhouse, slug: druva }
+  - { name: Groww,           ats: greenhouse, slug: groww }
+  - { name: InMobi,          ats: greenhouse, slug: inmobi }
+  - { name: Vercel,          ats: greenhouse, slug: vercel }
+  - { name: Fivetran,        ats: greenhouse, slug: fivetran }
+  - { name: New Relic,       ats: greenhouse, slug: newrelic }
+  - { name: Okta,            ats: greenhouse, slug: okta }
+  - { name: Sumo Logic,      ats: greenhouse, slug: sumologic }
+  - { name: Yugabyte,        ats: greenhouse, slug: yugabyte }
+  - { name: Canonical,       ats: greenhouse, slug: canonical }
+  - { name: Tailscale,       ats: greenhouse, slug: tailscale }
+  - { name: Truecaller,      ats: greenhouse, slug: truecaller }
+  - { name: Tide,            ats: greenhouse, slug: tide }
+  - { name: Agoda,           ats: greenhouse, slug: agoda }
+
+  # ── Lever ────────────────────────────────────────────────────
+  - { name: CRED,            ats: lever, slug: cred }
+  - { name: Meesho,          ats: lever, slug: meesho }
+  - { name: Paytm,           ats: lever, slug: paytm }
+  - { name: Zeta,            ats: lever, slug: zeta }
+  - { name: FamPay,          ats: lever, slug: fampay }
+
+  # ── Ashby ────────────────────────────────────────────────────
+  - { name: OpenAI,          ats: ashby, slug: openai }
+  - { name: Notion,          ats: ashby, slug: notion }
+  - { name: Temporal,        ats: ashby, slug: temporal }
+  - { name: Cursor,          ats: ashby, slug: cursor }
+  - { name: Atlan,           ats: ashby, slug: atlan }
+  - { name: Composio,        ats: ashby, slug: composio }
+  - { name: Sarvam AI,       ats: ashby, slug: sarvam }
+  - { name: Railway,         ats: ashby, slug: railway }
+  - { name: Render,          ats: ashby, slug: render }
+  - { name: Supabase,        ats: ashby, slug: supabase }

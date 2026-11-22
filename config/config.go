@@ -11,8 +11,9 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	// Database
+	// Storage: Postgres when DatabaseURL is set, otherwise a local JSON file
 	DatabaseURL string
+	StoreFile   string
 
 	// Telegram
 	TelegramBotToken string
@@ -32,7 +33,15 @@ type Config struct {
 	CronSchedule string
 
 	// Notifications
-	NotificationBatchSize int
+	DryRun bool // print Telegram messages instead of sending them
+	// NotifyFirstRun sends jobs found on the very first run against an empty
+	// store; by default that run only seeds the store, to avoid a flood.
+	NotifyFirstRun bool
+
+	// Feeds
+	ProfilesFile   string
+	CompaniesFile  string
+	MaxConcurrency int // max browser-based scrape tasks running at once
 }
 
 // Load reads config from environment variables (and optional .env file)
@@ -41,7 +50,8 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	return &Config{
-		DatabaseURL:      getEnv("DATABASE_URL", "postgres://postgres:password@localhost:5432/jobscraper?sslmode=disable"),
+		DatabaseURL:      getEnv("DATABASE_URL", ""), // empty → local file store
+		StoreFile:        getEnv("STORE_FILE", ".data/seen.json"),
 		TelegramBotToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:   getEnv("TELEGRAM_CHAT_ID", ""),
 
@@ -55,7 +65,12 @@ func Load() *Config {
 
 		CronSchedule: getEnv("CRON_SCHEDULE", "0 * * * *"), // every hour
 
-		NotificationBatchSize: getEnvInt("NOTIFICATION_BATCH_SIZE", 10),
+		DryRun:         strings.EqualFold(os.Getenv("DRY_RUN"), "true"),
+		NotifyFirstRun: strings.EqualFold(os.Getenv("NOTIFY_FIRST_RUN"), "true"),
+
+		ProfilesFile:   getEnv("PROFILES_FILE", "profiles.yaml"),
+		CompaniesFile:  getEnv("COMPANIES_FILE", "companies.yaml"),
+		MaxConcurrency: max(getEnvInt("MAX_CONCURRENCY", 4), 1),
 	}
 }
 

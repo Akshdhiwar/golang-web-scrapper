@@ -1,45 +1,46 @@
-# 🕵️ Job Scraper — Production-Ready Go Job Aggregator
+# 🕵️ Job Scraper — Go Job Aggregator with Telegram Alerts
 
-A production-grade job scraping system that runs every hour and fetches the latest
-**Frontend**, **Backend**, and **Fullstack** developer job postings from LinkedIn,
-Indeed, and Naukri (India). New jobs are stored in PostgreSQL and pushed to a
-Telegram channel — zero duplicates, zero spam.
+Runs every hour and sends new job postings to a Telegram chat, grouped into
+**feeds**. Each feed has its own label and its own "already sent" list:
+
+| Feed | What it finds | Sources |
+|------|---------------|---------|
+| 🚀 **Dev Jobs – India** | Frontend / Backend / Fullstack developer roles in Mumbai, Bangalore, Hyderabad, Delhi, Pune | LinkedIn, Indeed |
+| 🐹 **Golang – Worldwide** | Go / Golang roles anywhere, on-site or remote | LinkedIn (Worldwide), Remote OK, Remotive, Arbeitnow, HN "Who is hiring?", company career pages |
+| 💼 **Software Engineer – Mumbai** | Any software engineering role in Mumbai, Navi Mumbai, Thane, or remote-India | LinkedIn, Indeed, Remote OK, Remotive, company career pages |
+| 🎨 **Frontend – Preferred Cities** | Frontend-only roles (React, Angular, Vue…) in the 5 preferred cities | LinkedIn, Indeed, company career pages |
+
+> **Naukri** is supported in code but currently answers automated requests with
+> "Access Denied" (bot protection), so it is not enabled in any feed.
+
+Feeds live in [`profiles.yaml`](profiles.yaml) and career pages in
+[`companies.yaml`](companies.yaml) — add or change either without touching Go code.
 
 ---
 
 ## 📐 Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        SCHEDULER (cron)                         │
-│                     Fires every 1 hour                          │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-          ┌──────────────────┼──────────────────┐
-          ▼                  ▼                  ▼
-   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-   │  LinkedIn   │  │   Indeed    │  │   Naukri    │
-   │ (Playwright)│  │   (Colly)   │  │   (Colly)   │
-   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘
-          └────────────────┼─────────────────┘
-                           │  raw []Job
-                           ▼
-                 ┌─────────────────┐
-                 │  PARSER LAYER   │
-                 │ score + tag     │
-                 └────────┬────────┘
-                          │
-                          ▼
-                 ┌─────────────────┐
-                 │  DEDUP LAYER    │◄── PostgreSQL UNIQUE(link)
-                 │ INSERT OR SKIP  │
-                 └────────┬────────┘
-                          │ new jobs only
-                          ▼
-                 ┌─────────────────┐
-                 │   NOTIFIER      │
-                 │  Telegram Bot   │
-                 └─────────────────┘
+                    GitHub Actions cron (hourly)  ─or─  built-in scheduler
+                                      │
+                        profiles.yaml (feeds) + companies.yaml
+                                      │
+          ┌───────────────────────────┴────────────────────────────┐
+          ▼                                                        ▼
+  SEARCH SOURCES (per keyword × location)               FEED SOURCES (once per run)
+  LinkedIn · Indeed (shared headless Chromium)          Remote OK · Remotive · Arbeitnow
+  Naukri (Colly)                                        HN Who's Hiring · Career pages
+  identical queries across feeds run once;              (Greenhouse / Lever / Ashby APIs)
+  worker pool of MAX_CONCURRENCY
+          └───────────────────────────┬────────────────────────────┘
+                                      ▼
+                      ROUTE results to the feeds that asked for them
+                                      ▼
+                 FILTER per feed: title / location regexes + freshness
+                                      ▼
+            DEDUP: jobs UNIQUE(link) + profile_jobs (feed, job) → new per feed
+                                      ▼
+            TELEGRAM: one labelled message batch per feed + run summary
 ```
 
 ---
@@ -47,81 +48,67 @@ Telegram channel — zero duplicates, zero spam.
 ## 🗂️ Project Structure
 
 ```
-job-scraper/
-├── cmd/
-│   └── main.go              # Entry point — wires everything together
+├── cmd/main.go               # Entry point — wires everything together
+├── profiles.yaml             # Job feeds: keywords, sources, filters
+├── companies.yaml            # Career pages (Greenhouse / Lever / Ashby boards)
 ├── config/
-│   └── config.go            # Env-based config with sane defaults
+│   ├── config.go             # Env-based settings
+│   └── profiles.go           # Loads + validates profiles.yaml / companies.yaml
+├── filter/filter.go          # Per-feed title / location / freshness filters
 ├── scrapers/
-│   ├── scraper.go           # Scraper interface definition
-│   ├── indeed.go            # Indeed India (Colly, static HTML)
-│   ├── naukri.go            # Naukri.com (Colly, JSON + HTML fallback)
-│   └── linkedin.go          # LinkedIn Jobs (Playwright, headless Chrome)
-├── models/
-│   └── job.go               # Job struct + relevance scoring
-├── db/
-│   └── postgres.go          # PostgreSQL connection, migration, CRUD
-├── notifier/
-│   └── telegram.go          # Telegram Bot API notifications
-├── scheduler/
-│   └── scheduler.go         # Cron pipeline orchestrator
-├── utils/
-│   └── helpers.go           # User agents, delays, retry, logger
-├── migrations/
-│   └── 001_create_jobs.sql  # Raw SQL migration (auto-applied on boot)
-├── .env.example             # Config template
-├── docker-compose.yml       # Postgres + App via Docker
-├── Dockerfile               # Multi-stage Go + Playwright build
-└── go.mod
+│   ├── scraper.go            # Scraper (search) and Feed (fetch-once) interfaces
+│   ├── browser.go            # One shared headless Chromium for all browser scrapers
+│   ├── browser_site.go       # Generic paginated browser scraping
+│   ├── linkedin.go           # LinkedIn public job search (Playwright)
+│   ├── indeed.go             # Indeed India (Playwright)
+│   ├── naukri.go             # Naukri.com (Colly, JSON + HTML fallback)
+│   └── feeds/                # Remote OK, Remotive, Arbeitnow, HN, career pages
+├── scheduler/scheduler.go    # Pipeline: tasks → worker pool → filter → dedup → notify
+├── db/postgres.go            # PostgreSQL connection, migrations, upsert, per-feed dedup
+├── notifier/telegram.go      # Telegram messages (labelled, size-aware batching)
+├── models/job.go             # Job struct + tag scoring
+└── utils/helpers.go          # User agents, delays, retry, logger
 ```
 
 ---
 
 ## ⚡ Quick Start
 
-### Option A — Docker Compose (Recommended)
+### Option A — Run locally (no Docker, no database) — simplest
+
+**Prerequisites:** Go 1.22+. That's it — Chromium is downloaded automatically
+the first time a browser source (Indeed, or the LinkedIn fallback) needs it.
 
 ```bash
-# 1. Clone and enter the project
-git clone https://github.com/yourname/job-scraper.git
-cd job-scraper
+cp .env.example .env      # set TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID (leave DATABASE_URL empty)
+make dry                  # one run, messages printed to the console instead of sent
+                          #   (read-only: saves nothing, so a later real run still sends them)
+make run                  # one run, sends to Telegram
+make watch                # keep running on CRON_SCHEDULE (default: hourly)
+```
 
-# 2. Copy and edit config
-cp .env.example .env
-# Edit .env — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID at minimum
+With no `DATABASE_URL`, "already sent" state lives in `.data/seen.json`
+(`STORE_FILE`). The **first run on an empty store only seeds it** — every job
+currently listed is recorded but nothing is sent, so you don't get a flood. From
+the second run on you get only new jobs. To send the first run too:
+`NOTIFY_FIRST_RUN=true make run`. Delete `.data/seen.json` to start over.
 
-# 3. Start everything
+### Option B — Docker Compose
+
+```bash
+cp .env.example .env      # set the Telegram values
 docker compose up -d
-
-# 4. Watch logs
 docker compose logs -f scraper
 ```
 
-### Option B — Run Locally
+Set `DATABASE_URL` in `.env` to use your Postgres; leave it empty and the file
+store is kept in the `scraper_data` volume.
 
-**Prerequisites:**
-- Go 1.21+
-- PostgreSQL 14+
-- Node.js 18+ (required by Playwright internals)
+### Option C — GitHub Actions
 
-```bash
-# 1. Install Go dependencies
-go mod download
-
-# 2. Install Playwright browser (one-time)
-go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
-
-# 3. Set up environment
-cp .env.example .env
-# Edit .env with your DB credentials and Telegram tokens
-
-# 4. Create the database
-createdb jobscraper
-# (the app runs migrations automatically on boot)
-
-# 5. Run
-go run ./cmd/main.go
-```
+`.github/workflows/scraper.yml` runs hourly with `RUN_ONCE=true` and Postgres
+from the `DATABASE_URL` secret (required there — the run refuses to start
+without it, since the file store would not persist between runs).
 
 ---
 
@@ -180,6 +167,14 @@ CREATE TABLE jobs (
     posted_at  TEXT,
     created_at TIMESTAMP   DEFAULT NOW()
 );
+
+-- Which jobs each feed has already sent (per-feed dedup)
+CREATE TABLE profile_jobs (
+    profile    TEXT NOT NULL,                -- feed id from profiles.yaml
+    job_id     INT  NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (profile, job_id)
+);
 ```
 
 ### Useful Queries
@@ -187,6 +182,10 @@ CREATE TABLE jobs (
 ```sql
 -- Jobs found in last hour
 SELECT * FROM jobs WHERE created_at >= NOW() - INTERVAL '1 hour' ORDER BY created_at DESC;
+
+-- Jobs sent per feed today
+SELECT profile, COUNT(*) FROM profile_jobs
+WHERE created_at::date = CURRENT_DATE GROUP BY profile;
 
 -- Jobs per source today
 SELECT source, COUNT(*) FROM jobs
@@ -205,81 +204,140 @@ FROM jobs GROUP BY company ORDER BY openings DESC LIMIT 20;
 
 ## ⚙️ Configuration Reference
 
-| Variable                  | Default                                    | Description                            |
-|---------------------------|--------------------------------------------|----------------------------------------|
-| `DATABASE_URL`            | `postgres://...localhost.../jobscraper`    | PostgreSQL connection string           |
-| `TELEGRAM_BOT_TOKEN`      | *(empty)*                                  | Your bot token from @BotFather         |
-| `TELEGRAM_CHAT_ID`        | *(empty)*                                  | Target chat/group/channel ID           |
-| `KEYWORDS`                | `frontend developer,backend developer,...` | Comma-separated search terms           |
-| `LOCATION`                | `India`                                    | Target location filter                 |
-| `MAX_PAGES`               | `3`                                        | Pages to scrape per keyword per source |
-| `MIN_DELAY_SECONDS`       | `1`                                        | Min delay between requests             |
-| `MAX_DELAY_SECONDS`       | `3`                                        | Max delay between requests             |
-| `MAX_RETRIES`             | `3`                                        | Retry attempts on failure              |
-| `CRON_SCHEDULE`           | `0 * * * *`                                | Cron expression (every hour)           |
-| `NOTIFICATION_BATCH_SIZE` | `10`                                       | Jobs per Telegram message              |
+### Environment variables
+
+| Variable                  | Default                                 | Description |
+|---------------------------|-----------------------------------------|-------------|
+| `DATABASE_URL`            | *(empty)*                               | PostgreSQL connection string; empty = local file store |
+| `STORE_FILE`              | `.data/seen.json`                       | File store used when `DATABASE_URL` is empty |
+| `NOTIFY_FIRST_RUN`        | `false`                                 | Send jobs on the first run against an empty store (default: seed only) |
+| `TELEGRAM_BOT_TOKEN`      | *(empty)*                               | Bot token from @BotFather |
+| `TELEGRAM_CHAT_ID`        | *(empty)*                               | Chat/group/channel that receives every feed |
+| `PROFILES_FILE`           | `profiles.yaml`                         | Feed definitions |
+| `COMPANIES_FILE`          | `companies.yaml`                        | Career pages for the `careers` source |
+| `MAX_CONCURRENCY`         | `4`                                     | Search tasks (browser pages) running at once |
+| `MAX_PAGES`               | `3`                                     | Default pages per query (a feed's `max_pages` wins) |
+| `MIN_DELAY_SECONDS`       | `1`                                     | Min delay between result pages |
+| `MAX_DELAY_SECONDS`       | `3`                                     | Max delay between result pages |
+| `MAX_RETRIES`             | `3`                                     | Retry attempts on navigation failure |
+| `CRON_SCHEDULE`           | `0 * * * *`                             | 5-field cron for the built-in scheduler |
+| `RUN_ONCE`                | `false`                                 | Run one pipeline and exit (used by GitHub Actions) |
+| `DRY_RUN`                 | `false`                                 | Print Telegram messages instead of sending |
+| `KEYWORDS` / `LOCATIONS`  | dev roles / 5 cities                    | Only used if `profiles.yaml` is missing |
+
+### Adding or changing a feed (`profiles.yaml`)
+
+```yaml
+- id: golang_world                 # stable id — used for dedup in the DB
+  label: "🐹 Golang – Worldwide"   # Telegram header
+  keywords: [golang, go developer] # queries for linkedin / indeed / naukri
+  locations: [Worldwide]
+  sources: [linkedin, remoteok, remotive, arbeitnow, hn, careers]
+  title_include: ['(?i)\bgo(lang)?\b']   # must match one (empty = all)
+  title_exclude: ['(?i)go[- ]to[- ]market']
+  location_include: []              # empty = anywhere
+  posted_within_hours: 24           # date filter sent to LinkedIn / Indeed
+  feed_max_age_hours: 72            # max age for API / career-page jobs
+  max_pages: 3
+```
+
+Filters are Go regular expressions and apply to **every** source. Indeed and
+Naukri only search India; use `linkedin` plus the API/career sources for
+global feeds. Changing an `id` makes it a brand-new feed (it will re-send).
+
+### Adding a company career page (`companies.yaml`)
+
+Find the board slug in the company's careers URL —
+`boards.greenhouse.io/<slug>`, `jobs.lever.co/<slug>` or `jobs.ashbyhq.com/<slug>` —
+and add `{ name: Acme, ats: greenhouse, slug: acme }`. Many large Indian
+companies use other ATS systems (Workday, Darwinbox…) without public APIs; their
+jobs still arrive via LinkedIn.
 
 ---
 
 ## 📬 Notification Format
 
-```
-🚀 New Jobs Found! (Batch 1/2)
-3 new listings
-━━━━━━━━━━━━━━━━━━
+Each run sends **one combined message**: a section per feed that has new jobs,
+each title linking to the posting, jobs ordered by relevance then recency, and
+the run stats as a footer:
 
-*Senior Fullstack Developer*
-🏢 Razorpay
-📍 Bangalore, Karnataka, India
-🌐 `LinkedIn`
-🕐 2 hours ago
-🏷 React · Node.js · TypeScript
-🔗 Apply Here
-
-*Backend Engineer – Go*
-🏢 Zepto
-📍 Mumbai, Maharashtra, India
-🌐 `Naukri`
-🕐 Posted today
-🏷 Golang · PostgreSQL · Docker
-🔗 Apply Here
-...
 ```
+🔔 3 new jobs · 2 feeds
+
+🚀 Dev Jobs – India · 2
+
+1. Senior Developer                       ← title is the link
+🏢 ICE · 📍 Hyderabad, India
+🕐 2h ago · LinkedIn
+
+2. Backend Engineer (Go)
+🏢 Razorpay · 📍 Bengaluru, India
+🕐 today · Career page · #Golang #AWS
+
+💼 Software Engineer – Mumbai · 1
+
+1. SDE II
+🏢 Zeta · 📍 Mumbai, India
+🕐 5h ago · LinkedIn
+
+⚡ 41s · 1277 scraped · careers, linkedin · next run ~38m
+```
+
+- Runs with nothing new send **nothing**.
+- The message only splits ("· part 1/2", feed headers marked "(cont.)") when
+  it would exceed Telegram's 4096-character limit.
+- Source failures arrive as a single "⚠️ Some sources had trouble" message.
+- A job that fits two feeds (e.g. a React role in Mumbai) appears in both sections.
 
 ---
 
 ## 🔍 Scraping Strategy Details
 
-| Source    | Method       | Approach                                                    |
-|-----------|--------------|-------------------------------------------------------------|
-| LinkedIn  | Playwright   | Headless Chromium; JS-evaluated DOM; `f_TPR=r3600` filter   |
-| Indeed    | Colly        | Static HTML scraping; `fromage=1` (last 24h) filter         |
-| Naukri    | Colly        | `__NEXT_DATA__` JSON extraction; HTML fallback              |
+| Source        | Method | Notes |
+|---------------|--------|-------|
+| LinkedIn      | HTTP (guest search endpoint), Playwright fallback | No browser needed normally; falls back to Chromium on 429 / errors. `f_TPR` = feed's `posted_within_hours`; `location=Worldwide` works |
+| Indeed India  | Playwright | `fromage` = days; often blocked (failures don't alert) |
+| Naukri        | Colly | `__NEXT_DATA__` JSON with HTML fallback; `jobAge` = days. **Currently blocked** ("Access Denied"), not used by any feed |
+| Remote OK     | JSON API | Latest ~100 remote jobs |
+| Remotive      | JSON API | Software-dev category; fetched every 6 h (UTC 0/6/12/18) per their usage guidance |
+| Arbeitnow     | JSON API | EU + remote jobs, newest first, up to 5 pages |
+| HN Who's Hiring | Algolia API | Top-level comments of the latest monthly thread; first line = title |
+| Career pages  | Greenhouse / Lever / Ashby APIs | Every company in `companies.yaml`; posting date filtered |
 
-**Incremental scraping** — each scraper stops as soon as it encounters a link already
-in its in-memory seen-set for the current run. Combined with the DB `UNIQUE(link)`
-constraint, this ensures no duplicate notifications.
+All browser scrapers share one headless Chromium (a fresh context per task,
+images/fonts/CSS blocked) that is only installed and launched when first
+needed. Identical queries requested by several feeds are scraped once and shared.
+
+**Early paging stop:** every scraped link is remembered for 14 days
+(`scraped_links` table / file store). Results are sorted newest first, so once
+≥80% of a page was already seen in an earlier run, the remaining pages are
+skipped — on hourly runs most queries need just one page.
 
 ---
 
 ## 🛡️ Error Handling
 
-| Scenario                    | Behavior                                          |
-|-----------------------------|---------------------------------------------------|
-| Single scraper fails        | Logged + Telegram alert; other scrapers continue  |
-| DB insert conflict          | Silently skipped (ON CONFLICT DO NOTHING)         |
-| Network timeout             | Retried up to `MAX_RETRIES` times (exponential)   |
-| Pipeline already running    | New tick skipped with a warning log               |
-| Telegram API down           | Logged; jobs still saved to DB                    |
-| Browser crash (Playwright)  | Error returned; scraper marked failed for run     |
+| Scenario                    | Behavior |
+|-----------------------------|----------|
+| A source fails              | Logged; one Telegram alert per source per run (not per task); Indeed alerts are muted |
+| One career page fails       | Logged and skipped; the source only fails if every company fails |
+| Duplicate job               | Stored once (`UNIQUE(link)`); notified once per feed (`profile_jobs`) |
+| Network timeout             | Retried up to `MAX_RETRIES` times with exponential backoff |
+| Pipeline already running    | New tick skipped (and GitHub Actions runs never overlap) |
+| Telegram rate limit (429)   | Waits `retry_after` and retries |
+| Telegram API down           | Logged; jobs still saved to DB |
+| Browser crash               | Relaunched on the next task |
 
 ---
 
 ## 🧪 Running Tests
 
 ```bash
-# Unit tests
+# Unit tests (filters, feed parsers, Telegram batching)
 go test ./...
+
+# Full run without sending anything to Telegram
+RUN_ONCE=true DRY_RUN=true go run ./cmd/main.go
 
 # With race detector
 go test -race ./...
@@ -318,6 +376,6 @@ go tool cover -html=coverage.out
 
 - This scraper targets **public job listings** — the same pages any browser user sees
 - Random delays (1–3s) and user-agent rotation are used to avoid hammering servers
-- Respects `robots.txt` where Colly's default behavior applies
+- Uses official public JSON APIs where they exist (Remote OK, Remotive, Arbeitnow, HN, Greenhouse, Lever, Ashby) and follows their usage notes (Remote OK links back to its listings; Remotive is polled 4× a day)
 - Do **not** use this to bypass paywalls, authentication, or CAPTCHA systems
 - Review each site's Terms of Service before using in a commercial context

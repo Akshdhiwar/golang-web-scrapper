@@ -1,0 +1,72 @@
+# profiles.yaml — one entry per job feed.
+#
+# Every feed posts to the same Telegram chat with its own label, and keeps its
+# own "already sent" list, so a job can appear once in each feed it matches.
+#
+# Fields
+#   id / label           unique id (used in the DB) and the Telegram header
+#   keywords/locations   queries sent to the search sources (linkedin, indeed, naukri)
+#   sources              linkedin, indeed, naukri   — search sites (India only for indeed/naukri)
+#                        (naukri is currently blocked by Naukri's bot protection — "Access
+#                        Denied" — so it is left out below; re-add it if that changes)
+#                        remoteok, remotive, arbeitnow, hn — public job APIs (fetched once per run)
+#                        careers — company career pages listed in companies.yaml
+#   title_include/...    Go RE2 regexes. Include: must match one (empty = all).
+#                        Exclude: dropped if any match. Applied to every source.
+#   posted_within_hours  date filter sent to search sites (default 24)
+#   feed_max_age_hours   max age for API / career-page jobs (default 72; some APIs
+#                        publish a day late). The DB stops repeats either way.
+#   max_pages            result pages per search query
+
+profiles:
+  # The original feed, unchanged.
+  - id: dev_india
+    label: "🚀 Dev Jobs – India"
+    keywords: [frontend developer, backend developer, fullstack developer]
+    locations: [Mumbai, Bangalore, Hyderabad, Delhi, Pune]
+    sources: [linkedin, indeed]
+    posted_within_hours: 24
+    max_pages: 3
+
+  - id: golang_world
+    label: "🐹 Golang – Worldwide"
+    keywords: [golang, go developer, go engineer]
+    locations: [Worldwide]
+    sources: [linkedin, remoteok, remotive, arbeitnow, hn, careers]
+    title_include:
+      - '(?i)\bgo(lang)?\b'
+    title_exclude:
+      - '(?i)go[- ]to[- ]market|\bgtm\b|\bon[- ]the[- ]go\b|\bgo[- ]live\b'
+    posted_within_hours: 24
+    max_pages: 3
+
+  - id: swe_mumbai
+    label: "💼 Software Engineer – Mumbai"
+    keywords: [software engineer, software developer, sde]
+    locations: [Mumbai]
+    sources: [linkedin, indeed, remoteok, remotive, careers]
+    title_include:
+      - '(?i)software|developer|programmer|\bsde\b|\bswe\b'
+      - '(?i)(back[- ]?end|front[- ]?end|full[- ]?stack|mobile|android|ios|web|platform|cloud|devops|data|ml|ai|qa|test|site reliability|sre|infrastructure|security|systems)\s+engineer'
+    title_exclude:
+      - '(?i)\b(sales|pre-?sales|civil|mechanical|electrical|chemical|structural|hvac|mep|maintenance|production)\s+engineer'
+    location_include:
+      - '(?i)\b(mumbai|bombay|thane|navi mumbai)\b'
+      # remote + India within the same location entry (entries are separated by ";")
+      - '(?i)remote[^;]*\bindia\b|\bindia\b[^;]*remote'
+    posted_within_hours: 24
+    max_pages: 3
+
+  - id: frontend_india
+    label: "🎨 Frontend – Preferred Cities"
+    keywords: [frontend developer, react developer]
+    locations: [Mumbai, Bangalore, Hyderabad, Delhi, Pune]
+    sources: [linkedin, indeed, careers]
+    title_include:
+      - '(?i)front[- ]?end|\breact(\.?js)?\b|angular|\bvue|\bui (developer|engineer)|next\.?js'
+    title_exclude:
+      - '(?i)full[- ]?stack|back[- ]?end'
+    location_include:
+      - '(?i)\b(mumbai|bombay|thane|navi mumbai|bangalore|bengaluru|hyderabad|delhi|new delhi|ncr|gurgaon|gurugram|noida|pune)\b'
+    posted_within_hours: 24
+    max_pages: 3

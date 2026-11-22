@@ -13,6 +13,9 @@ services:
 
     volumes:
       - scraper_logs:/app/logs
+      # File store (used when DATABASE_URL is empty in .env)
+      - scraper_data:/app/.data
 
 volumes:
   scraper_logs:
+  scraper_data:
