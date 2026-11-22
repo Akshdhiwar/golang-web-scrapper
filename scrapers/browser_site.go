@@ -94,6 +94,13 @@ func (s *browserScraper) scrape(site browserSite, q Query) ([]*models.Job, error
 			Timeout: playwright.Float(10000),
 		})
 		if err != nil && site.requireCards {
+			// No cards on the first page of a broad, newest-first search is
+			// how Indeed's bot wall looks (it serves a page, just not results).
+			// Report it as a block so the scheduler stops this source after a
+			// few in a row instead of waiting out every remaining query.
+			if pageNum == 0 {
+				return nil, fmt.Errorf("%s: no job cards on first page: %w", site.source, ErrBlocked)
+			}
 			s.logger.Warn("No job cards found or timeout",
 				zap.String("source", site.source), zap.String("url", searchURL), zap.Error(err))
 			break
